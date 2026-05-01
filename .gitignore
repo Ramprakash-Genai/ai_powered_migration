@@ -1,0 +1,44 @@
+# =========================
+# Python
+# =========================
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/.pytest_cache/
+
+# Virtual environment
+backend/.venv/
+.venv/
+
+# =========================
+# Environment / Secrets
+# =========================
+.env
+.env.*
+
+# =========================
+# Playwright
+# =========================
+**/playwright-report/
+**/test-results/
+
+# =========================
+# Node / React
+# =========================
+ui/ui_app/node_modules/
+ui/ui_app/dist/
+ui/ui_app/build/
+
+# =========================
+# OS / IDE
+# =========================
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# =========================
+# Logs
+# =========================
+*.log
