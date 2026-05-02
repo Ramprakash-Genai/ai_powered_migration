@@ -67,9 +67,16 @@ export default function MigrationChat({ onStageAdvance, onDetectionComplete }) {
     scrollToBottom();
   };
 
+  // ✅ Freeze/lock controls once user proceeds past a step
+  const sourceLocked = step > 1;
+  const inputTypeLocked = step > 2;
+  const pathLocked = step > 3 || loading;
+
   // -------- Step handlers --------
 
   const handleSourceSelect = (value) => {
+    if (sourceLocked) return;
+
     setSelectedSource(value);
     const label = sourceOptions.find((o) => o.value === value)?.label || value;
 
@@ -84,6 +91,8 @@ export default function MigrationChat({ onStageAdvance, onDetectionComplete }) {
   };
 
   const handleInputTypeSelect = (value) => {
+    if (inputTypeLocked) return;
+
     setSelectedInputType(value);
     const label = inputTypeOptions.find((o) => o.value === value)?.label || value;
 
@@ -99,9 +108,14 @@ export default function MigrationChat({ onStageAdvance, onDetectionComplete }) {
 
   const handleValidateAndDetect = async () => {
     if (!selectedSource || !selectedInputType || !inputPath) return;
+    if (pathLocked) return;
+
+    // ✅ sanitize inputPath (remove accidental wrapping quotes & trim)
+    const sanitizedPath = String(inputPath).trim().replace(/^["']+|["']+$/g, '');
+    setInputPath(sanitizedPath);
 
     appendMessages([
-      { id: `user-${Date.now()}`, from: 'user', text: `Input path provided: ${inputPath}` },
+      { id: `user-${Date.now()}`, from: 'user', text: `Input path provided: ${sanitizedPath}` },
       { id: `bot-${Date.now()}`, from: 'bot', type: 'loading' },
     ]);
 
@@ -112,7 +126,7 @@ export default function MigrationChat({ onStageAdvance, onDetectionComplete }) {
       const result = await detectProject({
         userProjectStyle: selectedSource,
         inputType: selectedInputType,
-        inputPath,
+        inputPath: sanitizedPath,
       });
 
       // Remove loading bubble and add completion bubble
@@ -172,7 +186,7 @@ export default function MigrationChat({ onStageAdvance, onDetectionComplete }) {
               Migration Assistant
             </Typography>
             <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-              Your AI companion for test migration
+              Your AI companion for test migration from Selenium + BDD → Playwright + BDD
             </Typography>
           </Box>
         </Box>
@@ -208,6 +222,9 @@ export default function MigrationChat({ onStageAdvance, onDetectionComplete }) {
             onSourceSelect={handleSourceSelect}
             onInputTypeSelect={handleInputTypeSelect}
             onValidateAndDetect={handleValidateAndDetect}
+            sourceLocked={sourceLocked}
+            inputTypeLocked={inputTypeLocked}
+            pathLocked={pathLocked}
           />
         ))}
       </Box>
@@ -242,6 +259,9 @@ function MessageBubble({
   onSourceSelect,
   onInputTypeSelect,
   onValidateAndDetect,
+  sourceLocked,
+  inputTypeLocked,
+  pathLocked,
 }) {
   const isUser = message.from === 'user';
 
@@ -293,6 +313,7 @@ function MessageBubble({
               <Select
                 value={selectedSource}
                 displayEmpty
+                disabled={sourceLocked}
                 onChange={(e) => onSourceSelect(e.target.value)}
               >
                 <MenuItem value="" disabled>
@@ -320,6 +341,7 @@ function MessageBubble({
               <Select
                 value={selectedInputType}
                 displayEmpty
+                disabled={inputTypeLocked}
                 onChange={(e) => onInputTypeSelect(e.target.value)}
               >
                 <MenuItem value="" disabled>
@@ -346,6 +368,7 @@ function MessageBubble({
             <TextField
               size="small"
               value={inputPath}
+              disabled={pathLocked}
               onChange={(e) => setInputPath(e.target.value)}
               placeholder={selectedInputType === 'html_report' ? 'C:/Reports/report.html' : 'C:/Projects/MyRepo'}
               sx={{ mt: 0.5, width: 420, maxWidth: '100%' }}
@@ -356,7 +379,7 @@ function MessageBubble({
                 variant="contained"
                 size="small"
                 sx={{ textTransform: 'none', fontWeight: 700 }}
-                disabled={!inputPath || loading}
+                disabled={!inputPath || pathLocked}
                 onClick={onValidateAndDetect}
               >
                 Validate & Detect
@@ -375,7 +398,14 @@ function MessageBubble({
             </Typography>
           </Box>
         ) : (
-          <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+          <Typography
+            variant="body2"
+            sx={{
+              whiteSpace: 'pre-wrap',
+              overflowWrap: 'anywhere',
+              wordBreak: 'break-word',
+            }}
+          >
             {message.text}
           </Typography>
         )}

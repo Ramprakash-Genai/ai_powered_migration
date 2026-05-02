@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from app.models.project_detection_input import ProjectDetectionInput
+from app.models.project_detection_override import ProjectDetectionOverrideInput
 from app.agents.project_detection_agent import ProjectDetectionAgent
 
 router = APIRouter(prefix="/api", tags=["project-detection"])
@@ -24,3 +25,15 @@ def detect_project(inp: ProjectDetectionInput):
         raise HTTPException(
             status_code=500, detail=f"Project detection failed: {str(e)}"
         )
+
+
+@router.post("/project-detection/override")
+def override_project_detection(inp: ProjectDetectionOverrideInput):
+    """
+    Clarification arbitration endpoint (rules-first).
+    IMPORTANT: Validation failures are NOT server errors.
+    """
+    agent = ProjectDetectionAgent()
+    # Always return agent response (accepted / rejected).
+    # Do NOT convert rule-based rejection into HTTP 500.
+    return agent.arbitrate_override(inp)

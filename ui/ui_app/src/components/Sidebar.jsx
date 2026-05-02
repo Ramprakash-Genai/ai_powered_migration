@@ -7,7 +7,7 @@ export default function Sidebar() {
       elevation={0}
       sx={{
         borderRadius: 3,
-        p: 2,
+        p: 1.75,
         height: 'calc(100vh - 32px)',
         position: 'sticky',
         top: 16,
@@ -19,50 +19,62 @@ export default function Sidebar() {
         gap: 2,
       }}
     >
-      {/* Bot Header */}
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+      {/* Header */}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25 }}>
         <Avatar
-          src="/bot.png" // optional: you can add public/bot.png later
+          src="/bot.png"
           alt="Bot Avatar"
           sx={{
-            width: 42,
-            height: 42,
+            width: 36,
+            height: 36,
             bgcolor: 'primary.main',
             fontWeight: 800,
+            fontSize: 14,
+            flexShrink: 0,
           }}
         >
           AI
         </Avatar>
 
-        <Box sx={{ minWidth: 0 }}>
-          <Typography variant="subtitle1" sx={{ fontWeight: 800, lineHeight: 1.2 }}>
+        <Box>
+          <Typography
+            sx={{
+              fontSize: 14,
+              fontWeight: 800,
+              lineHeight: 1.2,
+            }}
+          >
             AI Migration Assistant
-          </Typography>
-          <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-            Selenium + BDD → Playwright + BDD
-          </Typography>
+          </Typography>          
         </Box>
       </Box>
 
-      {/* Only required now */}
+      {/* New Migration Button */}
       <Button
         variant="contained"
-        startIcon={<AddRoundedIcon />}
+        startIcon={<AddRoundedIcon fontSize="small" />}
         sx={{
           borderRadius: 2,
           textTransform: 'none',
-          fontWeight: 700,
-          py: 1.1,
+          fontWeight: 600,
+          py: 0.75,
+          fontSize: 13,
         }}
         fullWidth
       >
         New Migration
       </Button>
 
-      {/* Spacer (future items can come here later) */}
+      {/* Spacer */}
       <Box sx={{ flex: 1 }} />
 
-      <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+      <Typography
+        sx={{
+          fontSize: 11,
+          color: 'text.secondary',
+          lineHeight: 1.3,
+        }}
+      >
         Step‑1 UI: Select source project style in the chat.
       </Typography>
     </Paper>

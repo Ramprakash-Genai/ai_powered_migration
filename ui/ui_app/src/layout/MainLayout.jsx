@@ -1,5 +1,15 @@
 import { useMemo, useState } from 'react';
-import { Box, Paper, Typography, LinearProgress } from '@mui/material';
+import {
+    Box,
+    Paper,
+    Typography,
+    LinearProgress,
+    Stepper,
+    Step,
+    StepLabel,
+    StepConnector,
+} from '@mui/material';
+import { styled } from '@mui/material/styles';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import Sidebar from '../components/Sidebar';
 import MigrationChat from '../components/MigrationChat';
@@ -22,8 +32,71 @@ function humanStatus(status) {
     return 'Pending';
 }
 
+const ProgressConnector = styled(StepConnector)(() => ({
+    [`& .MuiStepConnector-line`]: {
+        borderColor: '#cfcfcf',
+        borderTopWidth: 2,
+        borderRadius: 1,
+    },
+    [`&.Mui-active .MuiStepConnector-line`]: {
+        borderColor: '#1976d2',
+    },
+    [`&.Mui-completed .MuiStepConnector-line`]: {
+        borderColor: '#1976d2',
+    },
+}));
+
+function ProgressStepIcon(props) {
+    const { active, completed, className } = props;
+
+    if (completed) {
+        return (
+            <Box
+                className={className}
+                sx={{
+                    width: 28,
+                    height: 28,
+                    borderRadius: '50%',
+                    backgroundColor: '#4caf50',
+                    color: '#fff',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                }}
+            >
+                <CheckCircleIcon sx={{ fontSize: 18 }} />
+            </Box>
+        );
+    }
+
+    if (active) {
+        return (
+            <Box
+                className={className}
+                sx={{
+                    width: 28,
+                    height: 28,
+                    borderRadius: '50%',
+                    backgroundColor: '#1976d2',
+                }}
+            />
+        );
+    }
+
+    return (
+        <Box
+            className={className}
+            sx={{
+                width: 28,
+                height: 28,
+                borderRadius: '50%',
+                backgroundColor: '#bdbdbd',
+            }}
+        />
+    );
+}
+
 export default function MainLayout() {
-    // ✅ 8-stage progress (unchanged conceptually)
     const [stageState, setStageState] = useState([
         'IN_PROGRESS',
         'PENDING',
@@ -35,72 +108,53 @@ export default function MainLayout() {
         'PENDING',
     ]);
 
-    // ✅ Detection result drives right panel visibility
     const [detectionResult, setDetectionResult] = useState(null);
+    const [chatResetKey, setChatResetKey] = useState(0);
 
     const progressPercent = useMemo(() => {
         const completed = stageState.filter((s) => s === 'COMPLETED').length;
         return Math.round((completed / STAGES.length) * 100);
     }, [stageState]);
 
-    // Helpers to advance only first 4 steps for now:
-    const markStageCompletedAndNextInProgress = (completedIndex, nextIndex) => {
-        setStageState((prev) => {
-            const updated = [...prev];
-            updated[completedIndex] = 'COMPLETED';
-            if (nextIndex != null && updated[nextIndex] !== 'COMPLETED') {
-                updated[nextIndex] = 'IN_PROGRESS';
-            }
-            return updated;
-        });
+    const activeStep = useMemo(() => {
+        const idx = stageState.findIndex((s) => s === 'IN_PROGRESS');
+        if (idx !== -1) return idx;
+        const completedCount = stageState.filter((s) => s === 'COMPLETED').length;
+        return Math.min(completedCount, STAGES.length - 1);
+    }, [stageState]);
+
+    const resetFlow = () => {
+        setDetectionResult(null);
+        setStageState([
+            'IN_PROGRESS',
+            'PENDING',
+            'PENDING',
+            'PENDING',
+            'PENDING',
+            'PENDING',
+            'PENDING',
+            'PENDING',
+        ]);
+        // ✅ Force MigrationChat remount
+        setChatResetKey(prev => prev + 1);
     };
 
-    const setReviewStageInProgress = () => {
-        setStageState((prev) => {
-            const updated = [...prev];
-            // Ensure stage 7 is in progress for review
-            if (updated[7] !== 'COMPLETED') updated[7] = 'IN_PROGRESS';
-            return updated;
-        });
-    };
-
-    const handleDetectionComplete = (result) => {
-        setDetectionResult(result);
-        // We treat detection as: Parse Repo completed, move to Review stage
-        // (You can refine mapping later; for now it enables right panel + review gate)
-        markStageCompletedAndNextInProgress(2, 7);
-        setReviewStageInProgress();
-    };
-
-    const handleUserConfirms = () => {
-        // User approval completes Review stage
-        setStageState((prev) => {
-            const updated = [...prev];
-            updated[7] = 'COMPLETED';
-            return updated;
-        });
-        // Next agent will start later
-        alert('Approved. Next agent will be triggered in the next implementation step.');
-    };
-
-    const handleUserRejects = () => {
-        alert('Rejected. Flow will be reworked (next step: ask for correction / restart).');
-    };
 
     return (
         <Box
             sx={{
                 minHeight: '100vh',
                 display: 'grid',
-                gridTemplateColumns: detectionResult ? '280px 1fr 420px' : '280px 1fr',
+                gridTemplateColumns: detectionResult
+                    ? '180px minmax(640px, 2fr) minmax(380px, 1fr)'
+                    : '180px 1fr',
                 gap: 2,
                 p: 2,
+                overflowX: 'hidden',
             }}
         >
-            {/* LEFT */}
             <Sidebar />
 
-            {/* CENTER */}
             <Box
                 sx={{
                     display: 'flex',
@@ -110,7 +164,6 @@ export default function MainLayout() {
                     minWidth: 0,
                 }}
             >
-                {/* PROGRESS (fixed) */}
                 <Paper
                     elevation={0}
                     sx={{
@@ -133,104 +186,79 @@ export default function MainLayout() {
                         sx={{
                             height: 8,
                             borderRadius: 5,
-                            mb: 3,
+                            mb: 2,
                             backgroundColor: '#e0e0e0',
                             '& .MuiLinearProgress-bar': { backgroundColor: '#1976d2' },
                         }}
                     />
 
-                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <Stepper
+                        alternativeLabel
+                        activeStep={activeStep}
+                        connector={<ProgressConnector />}
+                        sx={{
+                            pt: 1,
+                            pb: 0,
+                            '& .MuiStepLabel-label': {
+                                fontSize: 12,
+                                lineHeight: 1.2,
+                                wordBreak: 'break-word',
+                                textAlign: 'center',
+                            },
+                            '& .MuiStepLabel-label.Mui-active': {
+                                color: '#1976d2',
+                                fontWeight: 700,
+                            },
+                            '& .MuiStepLabel-label.Mui-completed': {
+                                color: '#2e7d32',
+                                fontWeight: 600,
+                            },
+                        }}
+                    >
                         {STAGES.map((label, index) => {
                             const status = stageState[index];
                             const isCompleted = status === 'COMPLETED';
-                            const isInProgress = status === 'IN_PROGRESS';
 
                             return (
-                                <Box
-                                    key={label}
-                                    sx={{
-                                        display: 'flex',
-                                        flexDirection: 'column',
-                                        alignItems: 'center',
-                                        flex: 1,
-                                        position: 'relative',
-                                        minWidth: 0,
-                                    }}
-                                >
-                                    {index !== 0 && (
-                                        <Box
-                                            sx={{
-                                                position: 'absolute',
-                                                top: 14,
-                                                left: '-50%',
-                                                width: '100%',
-                                                height: 2,
-                                                backgroundColor: stageState[index - 1] === 'COMPLETED' ? '#1976d2' : '#cfcfcf',
-                                                zIndex: 0,
-                                            }}
-                                        />
-                                    )}
-
-                                    <Box
-                                        sx={{
-                                            width: 28,
-                                            height: 28,
-                                            borderRadius: '50%',
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            justifyContent: 'center',
-                                            backgroundColor: isCompleted ? '#4caf50' : isInProgress ? '#1976d2' : '#bdbdbd',
-                                            color: '#fff',
-                                            zIndex: 1,
-                                        }}
-                                    >
-                                        {isCompleted && <CheckCircleIcon sx={{ fontSize: 18 }} />}
-                                    </Box>
-
-                                    <Typography
-                                        sx={{
-                                            mt: 1,
-                                            fontSize: 12,
-                                            fontWeight: isInProgress ? 700 : 500,
-                                            color: isInProgress ? 'primary.main' : 'text.secondary',
-                                            textAlign: 'center',
-                                            px: 0.5,
-                                            whiteSpace: 'nowrap',
-                                            overflow: 'hidden',
-                                            textOverflow: 'ellipsis',
-                                            maxWidth: '100%',
-                                        }}
-                                    >
-                                        {label}
-                                    </Typography>
-
-                                    <Typography variant="caption" sx={{ color: 'text.secondary', mt: 0.5 }}>
-                                        {humanStatus(status)}
-                                    </Typography>
-                                </Box>
+                                <Step key={label} completed={isCompleted}>
+                                    <StepLabel StepIconComponent={ProgressStepIcon}>
+                                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+                                            <Typography
+                                                sx={{
+                                                    fontSize: 12,
+                                                    fontWeight: status === 'IN_PROGRESS' ? 700 : 500,
+                                                    color: status === 'IN_PROGRESS' ? '#1976d2' : 'text.secondary',
+                                                }}
+                                            >
+                                                {label}
+                                            </Typography>
+                                            <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>
+                                                {humanStatus(status)}
+                                            </Typography>
+                                        </Box>
+                                    </StepLabel>
+                                </Step>
                             );
                         })}
-                    </Box>
+                    </Stepper>
                 </Paper>
 
-                {/* CHAT (takes remaining height, scroll-safe) */}
                 <Box sx={{ flex: 1, minHeight: 0 }}>
                     <MigrationChat
-                        onStageAdvance={(stageIndexDone, stageIndexNext) =>
-                            markStageCompletedAndNextInProgress(stageIndexDone, stageIndexNext)
-                        }
-                        onDetectionComplete={handleDetectionComplete}
+                        key={chatResetKey}
+                        onDetectionComplete={setDetectionResult}
                     />
                 </Box>
             </Box>
 
-            {/* RIGHT (only after detection completes) */}
             {detectionResult && (
-                <MigrationOverview
-                    detectionResult={detectionResult}
-                    onConfirm={handleUserConfirms}
-                    onReject={handleUserRejects}
-                />
+                <Box sx={{ height: 'calc(100vh - 32px)' }}>
+                    <MigrationOverview
+                        detectionResult={detectionResult}
+                        onUpdateDetection={setDetectionResult}
+                        onResetFlow={resetFlow}
+                    />
+                </Box>
             )}
         </Box>
     );

@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 from app.parsers.html_report_parser import parse_html_report
 from app.models.project_detection_input import ProjectDetectionInput
 from app.models.project_detection_output import ProjectDetectionOutput
+from app.models.project_detection_override import ProjectDetectionOverrideInput
 
 # Optional CrewAI import (safe)
 try:
@@ -66,6 +67,16 @@ def _read_text_safely(path: Path, max_bytes: int = 300_000) -> str:
         return data.decode("utf-8", errors="ignore")
     except Exception:
         return ""
+
+
+def _expected_language_from_intent(intent: Optional[str]) -> Optional[str]:
+    if intent == "java-selenium-bdd":
+        return "java"
+    if intent == "python-selenium-bdd":
+        return "python"
+    if intent == "csharp-selenium-bdd":
+        return "csharp"
+    return None
 
 
 def _detect_repository(repo_path: str) -> Dict[str, Any]:
@@ -251,8 +262,8 @@ class ProjectDetectionAgent:
     """
     Role: Project Detection Agent (Agent #1)
     Behavior:
-      - If input_type == repository: detect project language/framework/tooling from folder structure.
-      - If input_type == html_report: extract step list + screenshot refs from HTML (no structure scan).
+      - Repository: deterministic detection + authoritative intent mismatch evidence (rules only).
+      - HTML report: deterministic extraction; language/tool cannot be validated (trust user intent).
     """
 
     def __init__(
@@ -263,7 +274,6 @@ class ProjectDetectionAgent:
         self.controls = controls or AgentControls()
         self.memory = memory or AgentMemory()
 
-        # CrewAI wrapper (optional, metadata only)
         self.crewai_agent = None
         if CrewAgent is not None:
             self.crewai_agent = CrewAgent(
@@ -277,6 +287,28 @@ class ProjectDetectionAgent:
     def run(self, inp: ProjectDetectionInput) -> ProjectDetectionOutput:
         if inp.input_type == "repository":
             detected = _detect_repository(inp.input_path)
+            expected_lang = _expected_language_from_intent(inp.user_project_style)
+
+            intent_mismatch = False
+            mismatch_reasons: List[str] = []
+
+            if (
+                expected_lang
+                and detected["language"] != "unknown"
+                and detected["language"] != expected_lang
+            ):
+                intent_mismatch = True
+                mismatch_reasons.append(
+                    f"User selected '{expected_lang}' style but repository appears '{detected['language']}'"
+                )
+                detected["evidence"].insert(
+                    0,
+                    f"⚠️ Intent mismatch: User selected '{expected_lang}' style but repository appears '{detected['language']}'.",
+                )
+                # reduce confidence slightly (still deterministic)
+                detected["confidence"] = max(
+                    0.0, round(detected["confidence"] - 0.2, 2)
+                )
 
             out = ProjectDetectionOutput(
                 input_type="repository",
@@ -289,12 +321,23 @@ class ProjectDetectionAgent:
                 signals=detected["signals"],
                 evidence=detected["evidence"],
                 confidence=detected["confidence"],
+                intent_mismatch=intent_mismatch,
+                intent_mismatch_reasons=mismatch_reasons,
+                validation_source="rule",
             )
             self.memory.remember(inp.model_dump(), out.model_dump())
             return out
 
-        # html_report mode (step + screenshot extraction)
+        # html_report mode
         parsed = parse_html_report(inp.input_path)
+
+        # Explicitly state limitation if user intent exists
+        ev = list(parsed.get("evidence", []))
+        if inp.user_project_style:
+            ev.insert(
+                0,
+                "ℹ️ HTML report does not contain reliable language/build metadata; proceeding based on user-selected project style.",
+            )
 
         out = ProjectDetectionOutput(
             input_type="html_report",
@@ -304,25 +347,153 @@ class ProjectDetectionAgent:
             steps=parsed["steps"],
             screenshots=parsed["screenshots"],
             scenarios=parsed["scenarios"],
-            evidence=parsed["evidence"],
+            evidence=ev,
             confidence=parsed["confidence"],
+            intent_mismatch=False,
+            intent_mismatch_reasons=[],
+            validation_source="rule",
         )
         self.memory.remember(inp.model_dump(), out.model_dump())
         return out
 
+    def arbitrate_override(self, inp: ProjectDetectionOverrideInput) -> Dict[str, Any]:
+        """
+        Rules-first arbitration.
+        Returns dict: { decision, updated_detection, validation_source, evidence }
+        """
+        input_type = inp.input_type
+        user_style = inp.user_project_style
+        correction = inp.user_correction
+        current = inp.current_detection or {}
+
+        # Default updated detection = current (we may replace)
+        updated_detection = dict(current)
+        evidence: List[str] = (
+            list(current.get("evidence", []))
+            if isinstance(current.get("evidence", []), list)
+            else []
+        )
+
+        # Repository arbitration: validate correction against repo signals
+        if input_type == "repository":
+            detected = _detect_repository(inp.input_path)
+            # ✅ Guard: repository override REQUIRES corrected language
+            if (
+                not correction.corrected_language
+                or correction.corrected_language == "unknown"
+            ):
+                return {
+                    "decision": "rejected",
+                    "updated_detection": current,
+                    "validation_source": "rule",
+                    "evidence": [
+                        "❌ Correction rejected: Programming Language is required to validate a repository."
+                    ],
+                }
+
+            # Build a rule-based decision:
+            # If user correction language provided and does not match detected, reject.
+            if correction.corrected_language and detected["language"] != "unknown":
+                if correction.corrected_language != detected["language"]:
+                    evidence.insert(
+                        0,
+                        (
+                            f"❌ Conflict detected: Repository analysis indicates '{detected['language']}' "
+                            f"(originally detected from the uploaded repository), but you provided "
+                            f"'{correction.corrected_language}' in the confirmation popup. "
+                            "Unable to move forward. Please restart and provide correct details."
+                        ),
+                    )
+                    return {
+                        "decision": "rejected",
+                        "updated_detection": current,
+                        "validation_source": "rule",
+                        "evidence": evidence,
+                    }
+
+            # If user correction framework provided and repo already detected a concrete framework, validate.
+            if (
+                correction.corrected_bdd_framework
+                and detected["bdd_framework"] != "unknown"
+            ):
+                if (
+                    correction.corrected_bdd_framework.lower().strip()
+                    != detected["bdd_framework"]
+                ):
+                    evidence.insert(
+                        0,
+                        f"❌ Your clarification is not supported by repository structure. Repo indicates framework '{detected['bdd_framework']}', but you claimed '{correction.corrected_bdd_framework}'.",
+                    )
+                    return {
+                        "decision": "rejected",
+                        "updated_detection": current,
+                        "validation_source": "rule",
+                        "evidence": evidence,
+                    }
+
+            # ✅ Safety guard: NEVER re-run detection unless correction matches repo language
+            if correction.corrected_language != detected["language"]:
+                return {
+                    "decision": "rejected",
+                    "updated_detection": current,
+                    "validation_source": "rule",
+                    "evidence": [
+                        f"❌ Repository language is '{detected['language']}', not '{correction.corrected_language}'."
+                    ],
+                }
+            # If we reach here, accept correction as valid (or repo is unknown/ambiguous)
+            # We rerun detection but keep user_project_style possibly updated if user clarified language.
+            new_intent = user_style
+            if correction.corrected_language:
+                if correction.corrected_language == "java":
+                    new_intent = "java-selenium-bdd"
+                elif correction.corrected_language == "python":
+                    new_intent = "python-selenium-bdd"
+                elif correction.corrected_language == "csharp":
+                    new_intent = "csharp-selenium-bdd"
+
+            new_out = self.run(
+                ProjectDetectionInput(
+                    user_project_style=new_intent,
+                    input_type="repository",
+                    input_path=inp.input_path,
+                )
+            ).model_dump()
+
+            # Add acceptance evidence
+            new_ev = list(new_out.get("evidence", []))
+            new_ev.insert(
+                0,
+                "✅ You are correct. Identification updated based on your confirmation/clarification.",
+            )
+            new_out["evidence"] = new_ev
+
+            return {
+                "decision": "accepted",
+                "updated_detection": new_out,
+                "validation_source": "rule",
+                "evidence": new_out.get("evidence", []),
+            }
+
+        # HTML report arbitration: cannot validate language; accept user confirmation
+        # Update evidence to reflect acceptance and proceed with user-selected style
+        evidence.insert(
+            0,
+            "✅ You are correct. For HTML reports, language/tool cannot be reliably inferred; proceeding based on your confirmation.",
+        )
+        updated_detection["evidence"] = evidence
+        updated_detection["user_project_style"] = user_style
+
+        return {
+            "decision": "accepted",
+            "updated_detection": updated_detection,
+            "validation_source": "rule",
+            "evidence": evidence,
+        }
+
 
 # LangGraph node (orchestration-ready)
 def project_detection_node(state: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Input state expects:
-      {
-        "user_project_style": "...",
-        "input_type": "repository|html_report",
-        "input_path": "..."
-      }
-    Output adds:
-      { "project_detection": <ProjectDetectionOutput dict> }
-    """
     inp = ProjectDetectionInput(**state)
     agent = ProjectDetectionAgent()
     out = agent.run(inp)
