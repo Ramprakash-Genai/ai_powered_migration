@@ -14,7 +14,7 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import Sidebar from '../components/Sidebar';
 import MigrationChat from '../components/MigrationChat';
 import MigrationOverview from '../components/MigrationOverview';
-
+import { buildProjectNormalization } from '../api/project_normalization';
 const STAGES = [
     'Select Source Style',
     'Confirm Target',
@@ -138,6 +138,22 @@ export default function MainLayout() {
         // ✅ Force MigrationChat remount
         setChatResetKey(prev => prev + 1);
     };
+    const [normalizedContext, setNormalizedContext] = useState(null);
+    const handleProceedToNormalization = async () => {
+        if (!detectionResult) return;
+        try {
+            const norm = await buildProjectNormalization(detectionResult);
+            if (norm?.error) {
+                console.error(norm.message);
+                return;
+            }
+            // ✅ Store normalized output
+            setNormalizedContext(norm);
+            console.log('✅ Project Normalization completed silently', norm);
+        } catch (e) {
+            console.error('❌ Normalization failed', e);
+        }
+    };
 
 
     return (
@@ -257,6 +273,7 @@ export default function MainLayout() {
                         detectionResult={detectionResult}
                         onUpdateDetection={setDetectionResult}
                         onResetFlow={resetFlow}
+                        onProceedToNormalization={handleProceedToNormalization}
                     />
                 </Box>
             )}

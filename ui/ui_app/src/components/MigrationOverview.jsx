@@ -20,6 +20,7 @@ export default function MigrationOverview({
     detectionResult,
     onUpdateDetection,
     onResetFlow,
+    onProceedToNormalization,
 }) {
     if (!detectionResult) return null;
 
@@ -50,6 +51,28 @@ export default function MigrationOverview({
 
     const repoMode = input_type === 'repository';
     const htmlMode = input_type === 'html_report';
+
+    // ✅ Determine whether detection is INVALID and must force restart
+    const mustForceRestart =
+        // Repository: invalid path or zero confidence
+        (repoMode &&
+            (confidence === 0 ||
+                evidence?.some((e) =>
+                    e.toLowerCase().includes('invalid repository path')
+                )
+            )
+        ) ||
+        // HTML report: invalid path OR no extracted data OR zero confidence
+        (htmlMode &&
+            (confidence === 0 ||
+                evidence?.some((e) =>
+                    e.toLowerCase().includes('invalid html_report path') ||
+                    e.toLowerCase().includes('not a file')
+                ) ||
+                ((steps?.length ?? 0) === 0 && (screenshots?.length ?? 0) === 0)
+            )
+        );
+
 
     const displayedConfidence = `${Math.round((confidence || 0) * 100)}%`;
 
@@ -251,14 +274,15 @@ export default function MigrationOverview({
 
             <Divider sx={{ my: 2 }} />
 
-            {!needHardResetConfirm && (
+            {/* Normal action buttons – ONLY when detection is valid */}
+            {!needHardResetConfirm && !mustForceRestart && (
                 <Box sx={{ display: 'flex', gap: 1.5 }}>
                     {!(repoMode && detectionResult.intent_mismatch) && (
                         <Button
                             fullWidth
                             variant="contained"
                             sx={{ textTransform: 'none', fontWeight: 700 }}
-                            onClick={() => alert('Yes confirmed. Next agent integration will be implemented next.')}
+                            onClick={() => onProceedToNormalization?.()}
                         >
                             Yes correct Go ahead for Migrate
                         </Button>
@@ -276,8 +300,8 @@ export default function MigrationOverview({
                 </Box>
             )}
 
-            {/* If rejected, enforce hard reset */}
-            {needHardResetConfirm && (
+            {/* Forced restart for INVALID detection */}
+            {(needHardResetConfirm || mustForceRestart) && (
                 <Box sx={{ mt: 1.5 }}>
                     <Button
                         fullWidth

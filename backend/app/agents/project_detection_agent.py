@@ -50,8 +50,49 @@ FEATURE_EXT = ".feature"
 
 
 def _walk_files(repo_path: Path, max_files: int = 20000) -> List[Path]:
+    """
+    Summary of walk files:
+        sample_repo/
+        ├── pom.xml
+        ├── README.md
+        ├── src/
+        │   └── test/
+        │       └── java/
+        │           └── LoginTest.java
+        └── features/
+            └── login.feature
+
+    How the below program works:
+        First iteration:
+        root = "C:/Projects/sample_repo"
+        filenames = ["pom.xml", "README.md"]
+        ie
+        File: 1
+           fn = "pom.xml"
+            count = 1
+            files.append(Path("C:/Projects/sample_repo/pom.xml"))
+        File:2
+            fn = "README.md"
+            count = 2
+            files.append(Path("C:/Projects/sample_repo/README.md"))
+            \.....\---similarly each iteration get the file names and its count from the repo folder
+            Finally
+            return files = [
+                        Path("C:/Projects/sample_repo/pom.xml"),
+                        Path("C:/Projects/sample_repo/README.md"),
+                        Path("C:/Projects/sample_repo/src/test/java/LoginTest.java"),
+                        Path("C:/Projects/sample_repo/features/login.feature")
+                    ]
+            Note: on final step the count get increased to the number of Files (ie 4 as per above eg)
+            In For loop :
+            root - current folder
+            _ - sub folder
+            filenames - Files in the folder
+    """
+    # initialized with empty list and zero count
     files: List[Path] = []
     count = 0
+
     for root, _, filenames in os.walk(repo_path):
         for fn in filenames:
             count += 1
@@ -80,6 +121,12 @@ def _expected_language_from_intent(intent: Optional[str]) -> Optional[str]:
 
 
 def _detect_repository(repo_path: str) -> Dict[str, Any]:
+    """
+    Detect repository working Summary:
+    Detecting the repository based on the different level of validation and strong walk through inside with
+    each folder and files from the root folder and return the results
+    """
+
     repo = Path(repo_path).resolve()
     evidence: List[str] = []
 
@@ -286,8 +333,10 @@ class ProjectDetectionAgent:
 
     def run(self, inp: ProjectDetectionInput) -> ProjectDetectionOutput:
         if inp.input_type == "repository":
-            detected = _detect_repository(inp.input_path)
-            expected_lang = _expected_language_from_intent(inp.user_project_style)
+            detected: Dict[str, Any] = _detect_repository(inp.input_path)
+            expected_lang: str | None = _expected_language_from_intent(
+                inp.user_project_style
+            )
 
             intent_mismatch = False
             mismatch_reasons: List[str] = []
@@ -332,13 +381,21 @@ class ProjectDetectionAgent:
         parsed = parse_html_report(inp.input_path)
 
         # Explicitly state limitation if user intent exists
+        # HTML report evidence handling (confidence-aware)
         ev = list(parsed.get("evidence", []))
-        if inp.user_project_style:
+
+        confidence = parsed.get("confidence", 0.0)
+
+        if confidence >= 0.9:
+            ev.insert(
+                0,
+                "✅ HTML report parsed successfully with high confidence. Extracted details are sufficient to proceed with migration.",
+            )
+        else:
             ev.insert(
                 0,
                 "ℹ️ HTML report does not contain reliable language/build metadata; proceeding based on user-selected project style.",
             )
-
         out = ProjectDetectionOutput(
             input_type="html_report",
             user_project_style=inp.user_project_style,
