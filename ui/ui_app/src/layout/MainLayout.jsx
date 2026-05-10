@@ -15,6 +15,7 @@ import Sidebar from '../components/Sidebar';
 import MigrationChat from '../components/MigrationChat';
 import MigrationOverview from '../components/MigrationOverview';
 import { buildProjectNormalization } from '../api/project_normalization';
+import { buildMigrationPlan } from '../api/projectMigrationPlanner';
 const STAGES = [
     'Select Source Style',
     'Confirm Target',
@@ -110,6 +111,7 @@ export default function MainLayout() {
 
     const [detectionResult, setDetectionResult] = useState(null);
     const [chatResetKey, setChatResetKey] = useState(0);
+    const [migrationPlan, setMigrationPlan] = useState(null);
 
     const progressPercent = useMemo(() => {
         const completed = stageState.filter((s) => s === 'COMPLETED').length;
@@ -141,17 +143,56 @@ export default function MainLayout() {
     const [normalizedContext, setNormalizedContext] = useState(null);
     const handleProceedToNormalization = async () => {
         if (!detectionResult) return;
+
         try {
+            // Step‑1: Agent‑2 (NIM)
             const norm = await buildProjectNormalization(detectionResult);
             if (norm?.error) {
                 console.error(norm.message);
                 return;
             }
-            // ✅ Store normalized output
+
             setNormalizedContext(norm);
             console.log('✅ Project Normalization completed silently', norm);
+
+            // ✅ Step‑2: Agent‑3 (Migration Planner)
+            const plannerInput =
+                norm.context_type === 'html_report'
+                    ? {
+                        ...norm,
+
+                        // ✅ carry forward HTML-specific data from Agent‑1
+                        report_type: detectionResult.report_type,
+
+                        // ✅ CRITICAL: pass step text list
+                        steps: detectionResult.steps || [],
+
+                        // ✅ CRITICAL: define scenario explicitly so step names render
+                        scenarios: [
+                            detectionResult.report_type
+                                ? `HTML Report – ${detectionResult.report_type}`
+                                : 'Scenario 1',
+                        ],
+
+                        screenshots: detectionResult.screenshots || [],
+                    }
+                    : norm;
+
+            const plan = await buildMigrationPlan(plannerInput);
+
+            if (plan?.error) {
+                console.error(plan.message);
+                return;
+            }
+
+            setMigrationPlan(plan);
+            console.log('✅ Migration Planner output', plan);
+            if (plan?.error) {
+                console.error(plan.message);
+                return;
+            }
         } catch (e) {
-            console.error('❌ Normalization failed', e);
+            console.error('❌ Normalization / Planning failed', e);
         }
     };
 
@@ -271,6 +312,7 @@ export default function MainLayout() {
                 <Box sx={{ height: 'calc(100vh - 32px)' }}>
                     <MigrationOverview
                         detectionResult={detectionResult}
+                        migrationPlan={migrationPlan}
                         onUpdateDetection={setDetectionResult}
                         onResetFlow={resetFlow}
                         onProceedToNormalization={handleProceedToNormalization}

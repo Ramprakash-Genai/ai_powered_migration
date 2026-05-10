@@ -18,6 +18,7 @@ import { overrideProjectDetection } from '../api/projectDetection';
 
 export default function MigrationOverview({
     detectionResult,
+    migrationPlan,
     onUpdateDetection,
     onResetFlow,
     onProceedToNormalization,
@@ -51,6 +52,8 @@ export default function MigrationOverview({
 
     const repoMode = input_type === 'repository';
     const htmlMode = input_type === 'html_report';
+    const isPlannerPhase = Boolean(migrationPlan);
+
 
     // ✅ Determine whether detection is INVALID and must force restart
     const mustForceRestart =
@@ -234,45 +237,146 @@ export default function MigrationOverview({
 
             <Divider sx={{ my: 2 }} />
 
-            <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', pr: 1 }}>
-                <InfoRow label="Input Type" value={input_type} />
-                <InfoRow label="Project / Report Name" value={name || 'N/A'} />
+            {!isPlannerPhase && (
+                <Box
+                    sx={{
+                        flex: 1,
+                        minHeight: 0,
+                        overflowY: 'auto',
+                        pr: 1,
+                    }}
+                >
+                    {/* ✅ Agent‑1: Project Detection output ONLY */}
+                    <InfoRow label="Input Type" value={input_type} />
+                    <InfoRow label="Project / Report Name" value={name || 'N/A'} />
 
-                {repoMode ? (
-                    <>
-                        <InfoRow label="Programming Language" value={language || 'N/A'} />
-                        <InfoRow label="BDD Framework" value={bdd_framework || 'N/A'} />
-                        <InfoRow label="Build Tool" value={build_tool || 'N/A'} />
-                        <InfoRow label="Runner" value={runner || 'N/A'} />
-                        <InfoRow label="Confidence" value={displayedConfidence} />
-                    </>
-                ) : (
-                    <>
-                        <InfoRow label="Report Type" value={report_type || 'unknown'} />
-                        <InfoRow label="Steps Extracted" value={steps ? String(steps.length) : '0'} />
-                        <InfoRow label="Screenshots Found" value={screenshots ? String(screenshots.length) : '0'} />
-                        <InfoRow label="Confidence" value={displayedConfidence} />
-                    </>
-                )}
+                    {repoMode ? (
+                        <>
+                            <InfoRow label="Programming Language" value={language || 'N/A'} />
+                            <InfoRow label="BDD Framework" value={bdd_framework || 'N/A'} />
+                            <InfoRow label="Build Tool" value={build_tool || 'N/A'} />
+                            <InfoRow label="Runner" value={runner || 'N/A'} />
+                            <InfoRow label="Confidence" value={displayedConfidence} />
+                        </>
+                    ) : (
+                        <>
+                            <InfoRow label="Report Type" value={report_type || 'unknown'} />
+                            <InfoRow label="Steps Extracted" value={steps?.length ?? 0} />
+                            <InfoRow label="Screenshots Found" value={screenshots?.length ?? 0} />
+                            <InfoRow label="Confidence" value={displayedConfidence} />
+                        </>
+                    )}
 
-                {evidence?.length ? (
-                    <>
-                        <Divider sx={{ my: 2 }} />
-                        <Typography variant="subtitle2" sx={{ fontWeight: 800, mb: 1 }}>
-                            Evidence
-                        </Typography>
-                        <Box component="ul" sx={{ m: 0, pl: 2 }}>
-                            {evidence.map((ev, idx) => (
-                                <li key={idx}>
-                                    <Typography variant="body2">{ev}</Typography>
-                                </li>
+                    {evidence?.length && (
+                        <>
+                            <Divider sx={{ my: 2 }} />
+                            <Typography fontWeight={800}>Evidence</Typography>
+                            <ul>
+                                {evidence.map((ev, idx) => (
+                                    <li key={idx}>{ev}</li>
+                                ))}
+                            </ul>
+                        </>
+                    )}
+                </Box>
+            )}
+
+            {/* ================== Migration Planner Output ================== */}
+            {isPlannerPhase && (
+                <Box
+                    sx={{
+                        flex: 1,
+                        minHeight: 0,
+                        overflow: 'auto',
+                        pr: 1,
+                    }}
+                >
+                    <Typography variant="subtitle2" fontWeight={800} sx={{ mb: 1 }}>
+                        Migration Plan (Agent‑3)
+                    </Typography>
+
+                    {/* ---- Repository Planner ---- */}
+                    {migrationPlan.input_type === 'repository' && (
+                        <>
+                            <InfoRow label="Total Identified Feature Files" value={migrationPlan.feature_files?.count || 0} />
+                            <ul>
+                                {(migrationPlan.feature_files?.files || []).map(f => (
+                                    <li key={f} style={{ whiteSpace: 'nowrap' }}>{f}</li>
+                                ))}
+                            </ul>
+
+                            <InfoRow label="Total Step Definition Files" value={migrationPlan.step_definition_files?.count || 0} />
+                            <ul>
+                                {(migrationPlan.step_definition_files?.files || []).map(f => (
+                                    <li key={f} style={{ whiteSpace: 'nowrap' }}>{f}</li>
+                                ))}
+                            </ul>
+
+                            <InfoRow label="Support Files" value={migrationPlan.support_files?.count || 0} />
+                            <InfoRow
+                                label="Configuration Files"
+                                value={migrationPlan.config_files?.count || 0}
+                            />
+
+                            {(migrationPlan.config_files?.files || []).length > 0 && (
+                                <ul>
+                                    {(migrationPlan.config_files.files || []).map(f => (
+                                        <li key={f} style={{ whiteSpace: 'nowrap' }}>
+                                            {f}
+                                        </li>
+                                    ))}
+                                </ul>
+                            )}
+                        </>
+                    )}
+
+                    {/* ---- HTML Planner ---- */}
+                    {migrationPlan.input_type === 'html_report' && (
+                        <>
+                            <InfoRow
+                                label="Total Scenarios"
+                                value={migrationPlan.total_scenarios || 0}
+                            />
+
+                            {(migrationPlan.scenarios || []).map((sc, idx) => (
+                                <Box key={idx} sx={{ mb: 2 }}>
+                                    <Typography fontWeight={700}>
+                                        {sc.scenario_name}
+                                    </Typography>
+
+                                    <Typography variant="body2" sx={{ mb: 0.5 }}>
+                                        Steps: {sc.step_count}
+                                    </Typography>
+
+                                    {/* ✅ STEP NAMES LIST */}
+                                    {(sc.steps || []).length > 0 && (
+                                        <Box
+                                            component="ul"
+                                            sx={{
+                                                pl: 2.5,
+                                                mt: 0.5,
+                                                maxHeight: 220,
+                                                overflowY: 'auto',
+                                                overflowX: 'auto',
+                                                borderLeft: '2px solid #e0e0e0',
+                                            }}
+                                        >
+                                            {sc.steps.map((step, sidx) => (
+                                                <li key={sidx} style={{ whiteSpace: 'nowrap' }}>
+                                                    <Typography variant="body2">
+                                                        {step}
+                                                    </Typography>
+                                                </li>
+                                            ))}
+                                        </Box>
+                                    )}
+                                </Box>
                             ))}
-                        </Box>
-                    </>
-                ) : null}
-            </Box>
+                        </>
+                    )}
+                </Box>
+            )}
 
-            <Divider sx={{ my: 2 }} />
 
             {/* Normal action buttons – ONLY when detection is valid */}
             {!needHardResetConfirm && !mustForceRestart && (
@@ -284,10 +388,10 @@ export default function MigrationOverview({
                             sx={{ textTransform: 'none', fontWeight: 700 }}
                             onClick={() => onProceedToNormalization?.()}
                         >
-                            Yes correct Go ahead for Migrate
+                            ✅ Yes, I approve
                         </Button>
-                    )}
 
+                    )}
                     <Button
                         fullWidth
                         variant="outlined"
@@ -295,8 +399,9 @@ export default function MigrationOverview({
                         sx={{ textTransform: 'none', fontWeight: 700 }}
                         onClick={repoMode && detectionResult.intent_mismatch ? handleHardReset : openDialog}
                     >
-                        No not correct don&apos;t Migrate
+                        ❌ Not approved
                     </Button>
+
                 </Box>
             )}
 
