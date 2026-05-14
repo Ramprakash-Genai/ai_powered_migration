@@ -13,8 +13,12 @@ import {
     MenuItem,
     Select,
     TextField,
+    Alert,
 } from '@mui/material';
 import { overrideProjectDetection } from '../api/projectDetection';
+import MigrationSetupDialog from './MigrationSetupDialog'
+import MigrationExecutionPanel from './MigrationExecutionPanel';
+import MigrationDiffDialog from './MigrationDiffDialog';
 
 export default function MigrationOverview({
     detectionResult,
@@ -49,6 +53,19 @@ export default function MigrationOverview({
     const [correctedRunner, setCorrectedRunner] = useState('');
     const [decisionMsg, setDecisionMsg] = useState(null);
     const [needHardResetConfirm, setNeedHardResetConfirm] = useState(false);
+
+    // ✅ Agent‑4 Migration Setup popup state
+    const [openSetup, setOpenSetup] = useState(false);
+    const [setupError, setSetupError] = useState('');
+    const [setupResult, setSetupResult] = useState(null); // optional (for debug)
+    // ✅ Agent‑4 Execution / Review state
+    const [executionResult, setExecutionResult] = useState(null);
+    const [reviewMode, setReviewMode] = useState(false);
+
+    // ✅ Review selection + diff popup state
+    const [selectedFile, setSelectedFile] = useState(null);
+    const [openDiff, setOpenDiff] = useState(false);
+
 
     const repoMode = input_type === 'repository';
     const htmlMode = input_type === 'html_report';
@@ -212,6 +229,16 @@ export default function MigrationOverview({
         onResetFlow?.();
     };
 
+    const openMigrationSetup = () => {
+        setSetupError('');
+        setSetupResult(null);
+        setOpenSetup(true);
+    };
+
+    const closeMigrationSetup = () => {
+        setOpenSetup(false);
+    };
+
     return (
         <Paper
             elevation={0}
@@ -282,7 +309,7 @@ export default function MigrationOverview({
             )}
 
             {/* ================== Migration Planner Output ================== */}
-            {isPlannerPhase && (
+            {isPlannerPhase && !reviewMode && (
                 <Box
                     sx={{
                         flex: 1,
@@ -398,64 +425,152 @@ export default function MigrationOverview({
             )}
 
 
-            {/* Normal action buttons – ONLY when detection is valid */}
-            {/* ================= ACTION BUTTONS ================= */}
-            {isPlannerPhase ? (
-                /* ✅ Agent‑3 actions */
-                <Box sx={{ display: 'flex', gap: 1.5 }}>
-                    <Button
-                        fullWidth
-                        variant="contained"
-                        sx={{ textTransform: 'none', fontWeight: 700 }}
-                        onClick={() => {
-                            // 🔮 Future: trigger Agent‑4
-                            console.log('Planner approved – proceed to next agent');
-                        }}
-                    >
-                        ✅ Yes, I approve
-                    </Button>
 
-                    <Button
-                        fullWidth
-                        variant="contained"
-                        color="error"
-                        sx={{ textTransform: 'none', fontWeight: 700 }}
-                        onClick={handleHardReset}
-                    >
-                        ❌ Cancel
-                    </Button>
-                </Box>
-            ) : (
-                /* ✅ Agent‑1 actions (existing behavior) */
-                !needHardResetConfirm && !mustForceRestart && (
-                    <Box sx={{ display: 'flex', gap: 1.5 }}>
-                        {!(repoMode && detectionResult.intent_mismatch) && (
+            {/* ================= Agent‑4 File Review Panel (clean UI) ================= */}
+            {reviewMode && executionResult && (
+                <>
+                    {/* Always show list so user can see Approved/Rejected status */}
+                    <MigrationExecutionPanel
+                        files={executionResult.files || []}
+                        selectedFile={selectedFile}
+                        onSelectFile={(fp) => {
+                            const file = executionResult.files.find(f => f.path === fp);
+                            if (file?.status === 'PENDING') setSelectedFile(fp);
+                        }}
+                    />
+
+                    {/* Single button row for review stage */}
+                    {(() => {
+                        const allDone = (executionResult.files || []).every(f => f.status !== 'PENDING');
+
+                        return (
+                            <Box sx={{ display: 'flex', gap: 1.5, mt: 1 }}>
+                                {!allDone ? (
+                                    <Button
+                                        fullWidth
+                                        variant="contained"
+                                        sx={{ textTransform: 'none', fontWeight: 800 }}
+                                        disabled={!selectedFile}
+                                        onClick={() => setOpenDiff(true)}
+                                    >
+                                        Verify the Difference
+                                    </Button>
+                                ) : (
+                                    <Button
+                                        fullWidth
+                                        variant="contained"
+                                        sx={{ textTransform: 'none', fontWeight: 800 }}
+                                        onClick={() => {
+                                            const rejected = (executionResult.files || []).filter(f => f.status === 'REJECTED');
+                                            if (rejected.length > 0) {
+                                                console.log('🔧 Some files rejected — model review/repair will be implemented next.', rejected);
+                                            } else {
+                                                console.log('✅ All files approved — proceed to next agent (future).');
+                                            }
+                                        }}
+                                    >
+                                        All files are verified
+                                    </Button>
+                                )}
+
+                                <Button
+                                    fullWidth
+                                    variant="contained"
+                                    color="error"
+                                    sx={{ textTransform: 'none', fontWeight: 800 }}
+                                    onClick={handleHardReset}
+                                >
+                                    X Cancel
+                                </Button>
+                            </Box>
+                        );
+                    })()}
+
+                    {/* Diff popup */}
+                    <MigrationDiffDialog
+                        open={openDiff}
+                        file={(executionResult.files || []).find(f => f.path === selectedFile)}
+                        onClose={() => setOpenDiff(false)}
+                        onApprove={(filePath) => {
+                            setExecutionResult(prev => ({
+                                ...prev,
+                                files: prev.files.map(f =>
+                                    f.path === filePath ? { ...f, status: 'APPROVED' } : f
+                                ),
+                            }));
+                            setOpenDiff(false);
+                            setSelectedFile(null);
+                        }}
+                        onReject={(filePath, comment) => {
+                            setExecutionResult(prev => ({
+                                ...prev,
+                                files: prev.files.map(f =>
+                                    f.path === filePath ? { ...f, status: 'REJECTED', comment } : f
+                                ),
+                            }));
+                            setOpenDiff(false);
+                            setSelectedFile(null);
+                        }}
+                    />
+                </>
+            )}
+
+
+            {/* ================= ACTION BUTTONS ================= */}
+            {!reviewMode && (
+                <>
+                    {/* Agent‑3 stage buttons (planner approval) */}
+                    {isPlannerPhase && (
+                        <Box sx={{ display: 'flex', gap: 1.5 }}>
                             <Button
                                 fullWidth
                                 variant="contained"
                                 sx={{ textTransform: 'none', fontWeight: 700 }}
-                                onClick={() => onProceedToNormalization?.()}
+                                onClick={openMigrationSetup}
                             >
                                 ✅ Yes, I approve
                             </Button>
-                        )}
 
-                        <Button
-                            fullWidth
-                            variant="outlined"
-                            color="error"
-                            sx={{ textTransform: 'none', fontWeight: 700 }}
-                            onClick={
-                                repoMode && detectionResult.intent_mismatch
-                                    ? handleHardReset
-                                    : openDialog
-                            }
-                        >
-                            ❌ No not approved
-                        </Button>
-                    </Box>
-                )
+                            <Button
+                                fullWidth
+                                variant="contained"
+                                color="error"
+                                sx={{ textTransform: 'none', fontWeight: 700 }}
+                                onClick={handleHardReset}
+                            >
+                                X Cancel
+                            </Button>
+                        </Box>
+                    )}
+
+                    {/* Agent‑1 stage buttons (detection confirmation) */}
+                    {!isPlannerPhase && !needHardResetConfirm && !mustForceRestart && (
+                        <Box sx={{ display: 'flex', gap: 1.5 }}>
+                            {!(repoMode && detectionResult.intent_mismatch) && (
+                                <Button
+                                    fullWidth
+                                    variant="contained"
+                                    sx={{ textTransform: 'none', fontWeight: 700 }}
+                                    onClick={() => onProceedToNormalization?.()}
+                                >
+                                    ✅ Yes, I approve
+                                </Button>
+                            )}
+
+                            <Button
+                                fullWidth
+                                variant="outlined"
+                                color="error"
+                                sx={{ textTransform: 'none', fontWeight: 700 }}
+                                onClick={repoMode && detectionResult.intent_mismatch ? handleHardReset : openDialog}
+                            >
+                                ❌ No not approved
+                            </Button>
+                        </Box>
+                    )}
+                </>
             )}
+
 
             {/* Forced restart for INVALID detection */}
             {(needHardResetConfirm || mustForceRestart) && (
@@ -572,12 +687,54 @@ export default function MigrationOverview({
                 </DialogContent>
 
                 <DialogActions>
-                    <Button onClick={closeDialog}>Cancel</Button>
+                    <Button onClick={closeDialog}>❌ Cancel</Button>
                     <Button variant="contained" onClick={handleConfirmOverride}>
                         Confirm
                     </Button>
                 </DialogActions>
             </Dialog>
+            {/* ================= Agent‑4 Migration Setup Popup ================= */}
+            <MigrationSetupDialog
+                open={openSetup}
+                onClose={closeMigrationSetup}
+                sourceDetails={{
+                    input_type,
+                    name: name || 'N/A',
+                    language: language || 'unknown',
+                    bdd_framework: bdd_framework || 'unknown',
+                    build_tool: build_tool || 'unknown',
+                    runner: runner || 'unknown',
+                    report_type: report_type || 'unknown',
+                }}
+                onValidated={(res) => {
+                    setSetupResult(res);
+                    setSetupError('');
+
+                    // ✅ Simulated execution result (for now – real migration comes later)
+                    setExecutionResult({
+                        status: 'READY_FOR_REVIEW',
+                        files: [
+                            {
+                                path: 'steps/login_steps.py',
+                                status: 'PENDING',
+                                original: '# Selenium step code here',
+                                migrated: '# Playwright step code here',
+                            },
+                            {
+                                path: 'helpers/base_helper.py',
+                                status: 'PENDING',
+                                original: '# Selenium helper code',
+                                migrated: '# Playwright helper code',
+                            },
+                        ],
+                    });
+
+                    setReviewMode(true);
+                    closeMigrationSetup();
+                }}
+                onError={(msg) => setSetupError(msg)}
+                errorText={setupError}
+            />
         </Paper>
     );
 }
