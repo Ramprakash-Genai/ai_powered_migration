@@ -17,9 +17,10 @@ export default function MigrationExecutionPanel({
                         checked={selectedFile === file.path}
                         onChange={() => onSelectFile?.(file.path)}
                     />
-                    <Typography component="span" sx={{ fontSize: 14 }}>
+                    <Typography component="span" sx={{ fontSize: 14, whiteSpace: 'nowrap' }}>
                         {file.path}
                     </Typography>
+
 
                     {/* Small status badge */}
                     <Typography

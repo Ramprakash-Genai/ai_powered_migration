@@ -14,6 +14,7 @@ import {
     Select,
     TextField,
     Alert,
+    Backdrop,
 } from '@mui/material';
 import { overrideProjectDetection } from '../api/projectDetection';
 import MigrationSetupDialog from './MigrationSetupDialog'
@@ -58,6 +59,7 @@ export default function MigrationOverview({
     const [openSetup, setOpenSetup] = useState(false);
     const [setupError, setSetupError] = useState('');
     const [setupResult, setSetupResult] = useState(null); // optional (for debug)
+
     // ✅ Agent‑4 Execution / Review state
     const [executionResult, setExecutionResult] = useState(null);
     const [reviewMode, setReviewMode] = useState(false);
@@ -65,11 +67,13 @@ export default function MigrationOverview({
     // ✅ Review selection + diff popup state
     const [selectedFile, setSelectedFile] = useState(null);
     const [openDiff, setOpenDiff] = useState(false);
+    const EXECUTE_API_URL = 'http://localhost:8000/api/project-migration-execution/execute';
 
 
     const repoMode = input_type === 'repository';
     const htmlMode = input_type === 'html_report';
     const isPlannerPhase = Boolean(migrationPlan);
+    const [loadingRepair, setLoadingRepair] = useState(false);
 
 
     // ✅ Determine whether detection is INVALID and must force restart
@@ -241,6 +245,7 @@ export default function MigrationOverview({
 
     return (
         <Paper
+
             elevation={0}
             sx={{
                 borderRadius: 3,
@@ -254,6 +259,8 @@ export default function MigrationOverview({
                 overflow: 'hidden',
             }}
         >
+
+
             <Typography variant="h6" sx={{ fontWeight: 800 }}>
                 Migration Overview
             </Typography>
@@ -269,8 +276,9 @@ export default function MigrationOverview({
                     sx={{
                         flex: 1,
                         minHeight: 0,
-                        overflowY: 'auto',
+                        overflow: 'auto',     // ✅ enable both horizontal + vertical scroll
                         pr: 1,
+                        whiteSpace: 'nowrap', // ✅ allow horizontal scroll for long text
                     }}
                 >
                     {/* ✅ Agent‑1: Project Detection output ONLY */}
@@ -427,17 +435,22 @@ export default function MigrationOverview({
 
 
             {/* ================= Agent‑4 File Review Panel (clean UI) ================= */}
-            {reviewMode && executionResult && (
+            {reviewMode && executionResult?.files?.length > 0 && (
                 <>
                     {/* Always show list so user can see Approved/Rejected status */}
-                    <MigrationExecutionPanel
-                        files={executionResult.files || []}
-                        selectedFile={selectedFile}
-                        onSelectFile={(fp) => {
-                            const file = executionResult.files.find(f => f.path === fp);
-                            if (file?.status === 'PENDING') setSelectedFile(fp);
-                        }}
-                    />
+                    <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+                        <Box sx={{ minWidth: 'max-content', pr: 1 }}>
+                            <MigrationExecutionPanel
+                                files={executionResult.files || []}
+                                selectedFile={selectedFile}
+                                onSelectFile={(fp) => {
+                                    const file = executionResult.files.find(f => f.path === fp);
+                                    if (file?.status === 'PENDING') setSelectedFile(fp);
+                                }}
+                            />
+                        </Box>
+                    </Box>
+
 
                     {/* Single button row for review stage */}
                     {(() => {
@@ -460,14 +473,49 @@ export default function MigrationOverview({
                                         fullWidth
                                         variant="contained"
                                         sx={{ textTransform: 'none', fontWeight: 800 }}
-                                        onClick={() => {
+                                        onClick={async () => {
                                             const rejected = (executionResult.files || []).filter(f => f.status === 'REJECTED');
+
                                             if (rejected.length > 0) {
-                                                console.log('🔧 Some files rejected — model review/repair will be implemented next.', rejected);
-                                            } else {
-                                                console.log('✅ All files approved — proceed to next agent (future).');
+                                                console.log('❌ Some files are rejected. Fix before finalizing.', rejected);
+                                                return;
+                                            }
+
+                                            console.log('🚀 Saving ALL migrated files to target folder...');
+
+                                            try {
+                                                for (const file of (executionResult.files || [])) {
+
+                                                    const response = await fetch(EXECUTE_API_URL, {
+                                                        method: 'POST',
+                                                        headers: { 'Content-Type': 'application/json' },
+                                                        body: JSON.stringify({
+                                                            execution_mode: 'FINALIZE_FILE',
+
+                                                            target_language: setupResult?.target_language,
+                                                            target_bdd: setupResult?.target_bdd,
+
+                                                            target_path: setupResult?.target_path,
+                                                            repo_name: setupResult?.repo_name,
+                                                            file_path: file.path,
+                                                            migrated_code: file.migrated || '',
+                                                        }),
+                                                    });
+
+                                                    if (!response.ok) {
+                                                        const errText = await response.text();
+                                                        console.error(`❌ Failed saving ${file.path}:`, errText);
+                                                        return;
+                                                    }
+                                                }
+
+                                                console.log('✅ ALL FILES SAVED SUCCESSFULLY');
+
+                                            } catch (err) {
+                                                console.error('❌ Final save failed:', err);
                                             }
                                         }}
+
                                     >
                                         All files are verified
                                     </Button>
@@ -489,27 +537,127 @@ export default function MigrationOverview({
                     {/* Diff popup */}
                     <MigrationDiffDialog
                         open={openDiff}
-                        file={(executionResult.files || []).find(f => f.path === selectedFile)}
+                        file={(executionResult?.files || []).find(f => f.path === selectedFile)}
+                        loading={loadingRepair}
                         onClose={() => setOpenDiff(false)}
-                        onApprove={(filePath) => {
-                            setExecutionResult(prev => ({
-                                ...prev,
-                                files: prev.files.map(f =>
-                                    f.path === filePath ? { ...f, status: 'APPROVED' } : f
-                                ),
-                            }));
-                            setOpenDiff(false);
-                            setSelectedFile(null);
+                        onApprove={async (filePath) => {
+                            try {
+                                const fileObj = (executionResult?.files || []).find(f => f.path === filePath);
+
+                                const response = await fetch(EXECUTE_API_URL, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({
+                                        execution_mode: 'FINALIZE_FILE',
+
+                                        // ✅ REQUIRED for backend path mapping (python folder output)
+                                        target_language: setupResult?.target_language,
+                                        target_bdd: setupResult?.target_bdd,
+
+                                        target_path: setupResult?.target_path,
+                                        repo_name: setupResult?.repo_name,
+                                        file_path: filePath,
+                                        migrated_code: fileObj?.migrated || '',
+                                    }),
+                                });
+
+                                // ✅ Do NOT mark as Approved if backend save failed
+                                if (!response.ok) {
+                                    const errText = await response.text();
+                                    console.error('❌ FINALIZE_FILE failed:', errText);
+                                    return;
+                                }
+
+                                const saveResult = await response.json();
+                                console.log('✅ FINALIZE_FILE saveResult:', saveResult);
+
+                                setExecutionResult(prev => ({
+                                    ...prev,
+                                    files: prev.files.map(f =>
+                                        f.path === filePath ? { ...f, status: 'APPROVED' } : f
+                                    ),
+                                }));
+
+                                setOpenDiff(false);
+                                setSelectedFile(null);
+                            }
+                            catch (err) {
+                                console.error(err);
+                            }
                         }}
-                        onReject={(filePath, comment) => {
-                            setExecutionResult(prev => ({
-                                ...prev,
-                                files: prev.files.map(f =>
-                                    f.path === filePath ? { ...f, status: 'REJECTED', comment } : f
-                                ),
-                            }));
-                            setOpenDiff(false);
-                            setSelectedFile(null);
+
+                        onReject={async (filePath, comment) => {
+
+                            if (!comment || comment.trim() === "") {
+                                alert("Please provide comments before rejecting.");
+                                return;
+                            }
+                            setLoadingRepair(true);
+                            try {
+                                console.log("🚀 Sending REVIEW_REPAIR request...");
+
+                                const file = executionResult.files.find(f => f.path === filePath);
+
+                                const response = await fetch(EXECUTE_API_URL, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({
+                                        execution_mode: 'REVIEW_REPAIR',
+
+                                        file_path: filePath,
+                                        original_source_code: file.original,
+                                        migrated_code: file.migrated,
+                                        user_feedback: comment,
+
+                                        source_language: detectionResult.language,
+                                        source_bdd: detectionResult.bdd_framework,
+                                        target_language: setupResult?.target_language,
+                                        target_bdd: setupResult?.target_bdd,
+                                    }),
+                                });
+
+                                if (!response.ok) {
+                                    const err = await response.text();
+                                    console.error("❌ API Error:", err);
+                                    setLoadingRepair(false);   // ✅ ADD THIS
+                                    return;
+                                }
+
+                                const data = await response.json();
+                                const parsed = data?.agent_response;
+
+                                if (!parsed || !parsed.migrated_code) {
+                                    console.error("❌ Invalid agent response:", data);
+                                    setLoadingRepair(false);
+                                    return;
+                                }
+
+                                console.log("✅ REPAIR RESULT:", parsed);                               
+
+                                setExecutionResult(prev => ({
+                                    ...prev,
+                                    files: prev.files.map(f =>
+                                        f.path === filePath
+                                            ? {
+                                                ...f,
+                                                migrated: parsed.migrated_code || f.migrated,
+                                                justification: parsed.justification,
+                                                status: 'PENDING',   // ✅ bring back for re-review
+                                                decision: undefined
+                                            }
+                                            : f
+                                    ),
+                                }));
+
+                                // ✅ IMPORTANT: reopen diff for review again
+                                setSelectedFile(filePath);
+                                setOpenDiff(true);
+
+                            } catch (err) {
+                                console.error(err);
+                            } finally {
+                                setLoadingRepair(false);  // ✅ stop loader always
+                            }
                         }}
                     />
                 </>
@@ -687,10 +835,28 @@ export default function MigrationOverview({
                 </DialogContent>
 
                 <DialogActions>
-                    <Button onClick={closeDialog}>❌ Cancel</Button>
-                    <Button variant="contained" onClick={handleConfirmOverride}>
-                        Confirm
+                    <Button onClick={closeDialog} sx={{ textTransform: 'none' }}>
+                        Close
                     </Button>
+                    <>
+                        <Button
+                            variant="outlined"
+                            color="error"
+                            onClick={handleHardReset}
+                            sx={{ textTransform: 'none', fontWeight: 800 }}
+                        >
+                            Not approved
+                        </Button>
+
+                        <Button
+                            variant="contained"
+                            onClick={handleConfirmOverride}
+                            sx={{ textTransform: 'none', fontWeight: 800 }}
+                        >
+                            Approved
+                        </Button>
+                    </>
+
                 </DialogActions>
             </Dialog>
             {/* ================= Agent‑4 Migration Setup Popup ================= */}
@@ -706,32 +872,51 @@ export default function MigrationOverview({
                     runner: runner || 'unknown',
                     report_type: report_type || 'unknown',
                 }}
-                onValidated={(res) => {
+                onValidated={async (res) => {
+
                     setSetupResult(res);
                     setSetupError('');
 
-                    // ✅ Simulated execution result (for now – real migration comes later)
-                    setExecutionResult({
-                        status: 'READY_FOR_REVIEW',
-                        files: [
-                            {
-                                path: 'steps/login_steps.py',
-                                status: 'PENDING',
-                                original: '# Selenium step code here',
-                                migrated: '# Playwright step code here',
-                            },
-                            {
-                                path: 'helpers/base_helper.py',
-                                status: 'PENDING',
-                                original: '# Selenium helper code',
-                                migrated: '# Playwright helper code',
-                            },
-                        ],
-                    });
+                    try {
+                        const response = await fetch('http://localhost:8000/api/project-migration-execution/execute', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                execution_mode: 'INITIAL_MIGRATION',
+                                source_repo_path: detectionResult.input_path,
+                                source_language: detectionResult.language,
+                                source_bdd: detectionResult.bdd_framework,
 
-                    setReviewMode(true);
-                    closeMigrationSetup();
+                                target_language: res.target_language,
+                                target_bdd: res.target_bdd,
+                                target_build_tool: res.target_build_tool,
+                                target_runner: res.target_runner,
+
+                                target_path: res.target_path,
+                                repo_name: res.repo_name,
+                                migration_plan: migrationPlan,
+                            }),
+                        });
+
+                        const data = await response.json();
+
+                        if (!data?.executionResult?.files || data.executionResult.files.length === 0) {
+                            setSetupError('❌ No migrated files returned');
+                            return;
+                        }
+
+                        setExecutionResult(data.executionResult);
+                        setReviewMode(true);
+                        closeMigrationSetup();
+
+                    } catch (err) {
+                        console.error(err);
+                        setSetupError('❌ Failed to execute migration');
+                        throw err;   // ✅ IMPORTANT: rethrow so popup knows
+                    }
                 }}
+
+
                 onError={(msg) => setSetupError(msg)}
                 errorText={setupError}
             />

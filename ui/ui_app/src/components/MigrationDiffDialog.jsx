@@ -10,11 +10,14 @@ import {
     Divider,
     TextField,
     Alert,
+    Backdrop,
+    CircularProgress,
 } from '@mui/material';
 
 export default function MigrationDiffDialog({
     open,
     file,
+    loading,
     onClose,
     onApprove,
     onReject,
@@ -50,6 +53,18 @@ export default function MigrationDiffDialog({
             </DialogTitle>
 
             <DialogContent dividers sx={{ minHeight: 380 }}>
+                <Backdrop
+                    open={Boolean(loading)}
+
+                    sx={{
+                        color: '#fff',
+                        backgroundColor: 'rgba(0,0,0,0.4)',
+                        zIndex: (theme) => theme.zIndex.modal + 1
+                    }}
+
+                >
+                    <CircularProgress color="inherit" />
+                </Backdrop>
                 {err ? <Alert severity="error" sx={{ mb: 2 }}>{err}</Alert> : null}
 
                 <Typography variant="body2" sx={{ color: 'text.secondary', mb: 1 }}>
@@ -113,6 +128,15 @@ export default function MigrationDiffDialog({
                 <Divider sx={{ my: 2 }} />
 
                 {/* Comment (mandatory only for reject) */}
+                {/* ✅ Model justification (for repair / deny case) */}
+                {file?.justification && (
+                    <Alert
+                        severity={file?.decision === 'DENIED' ? 'error' : 'info'}
+                        sx={{ mb: 2 }}
+                    >
+                        {file.justification}
+                    </Alert>
+                )}
                 <TextField
                     fullWidth
                     multiline
@@ -125,26 +149,31 @@ export default function MigrationDiffDialog({
             </DialogContent>
 
             <DialogActions>
-                <Button onClick={onClose} sx={{ textTransform: 'none' }}>
+                <Button onClick={onClose} disabled={loading} sx={{ textTransform: 'none' }}>
                     Close
                 </Button>
 
-                <Button
-                    variant="outlined"
-                    color="error"
-                    onClick={handleReject}
-                    sx={{ textTransform: 'none', fontWeight: 800 }}
-                >
-                    Not approved
-                </Button>
+                {/* ✅ Hide actions if model DENIED the user */}
+                {file && (
+                    <>
+                        <Button
+                            variant="outlined"
+                            color="error"
+                            onClick={handleReject} disabled={loading}
+                            sx={{ textTransform: 'none', fontWeight: 800 }}
+                        >
+                            Not approved
+                        </Button>
 
-                <Button
-                    variant="contained"
-                    onClick={handleApprove}
-                    sx={{ textTransform: 'none', fontWeight: 800 }}
-                >
-                    Approved
-                </Button>
+                        <Button
+                            variant="contained"
+                            onClick={handleApprove} disabled={loading}
+                            sx={{ textTransform: 'none', fontWeight: 800 }}
+                        >
+                            Approved
+                        </Button>
+                    </>
+                )}
             </DialogActions>
         </Dialog>
     );
