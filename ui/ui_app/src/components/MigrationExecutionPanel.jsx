@@ -14,8 +14,8 @@ export default function MigrationExecutionPanel({
                 <Box key={file.path} sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}>
                     <Radio
                         disabled={file.status !== 'PENDING'}
-                        checked={selectedFile === file.path}
-                        onChange={() => onSelectFile?.(file.path)}
+                        checked={selectedFile === file.target_path}
+                        onChange={() => onSelectFile?.(file)}
                     />
                     <Typography component="span" sx={{ fontSize: 14, whiteSpace: 'nowrap' }}>
                         {file.path}

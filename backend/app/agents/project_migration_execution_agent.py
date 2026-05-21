@@ -15,6 +15,10 @@ class ProjectMigrationExecutionAgent:
         if payload.execution_mode == "REVIEW_REPAIR":
             return self._review_repair(payload)
 
+        # ✅ HTML: migrate one selected step (does NOT affect repo flow)
+        if payload.execution_mode == "HTML_STEP_MIGRATION":
+            return self._html_step_migration(payload)
+
         if payload.execution_mode == "FINALIZE_FILE":
             return self._finalize_file(payload)
 
@@ -31,17 +35,26 @@ class ProjectMigrationExecutionAgent:
 
         result_files = []
 
-        for rel_path in files:
+        for rel_path, category in files:
             if not rel_path:
                 continue
             src_file = source_root / rel_path
+
             if not src_file.exists():
                 continue
 
             original_code = src_file.read_text(encoding="utf-8", errors="ignore")
 
-            # ✅ FIX 1 — PATH MAPPING
-            new_rel_path = self._map_path(rel_path, payload)
+            # ✅ Heuristic safeguard: step definitions sometimes land in wrong category
+            # If file path clearly indicates step definitions, force category="step"
+            p_low = (rel_path or "").lower().replace("\\", "/")
+            if category != "step" and (
+                "/steps/" in p_low or "step" in Path(p_low).stem.lower()
+            ):
+                category = "step"
+
+            # ✅ PATH MAPPING (same-language keeps structure; cross-language uses target standard)
+            new_rel_path = self._map_path(rel_path, payload, category)
             tgt_file = target_root / new_rel_path
             tgt_file.parent.mkdir(parents=True, exist_ok=True)
 
@@ -51,16 +64,35 @@ class ProjectMigrationExecutionAgent:
                 justification = "Feature file retained in Gherkin format"
                 decision = "APPROVED"
 
-            # ✅ FIX 3 — pom.xml → requirements.txt
-            elif rel_path.endswith("pom.xml") and payload.target_language == "python":
-                new_rel_path = "requirements.txt"
-                tgt_file = target_root / new_rel_path
+            # ✅ DEPENDENCY FILE HANDLING (same-language keep as-is; cross-language convert)
+            elif (
+                Path(rel_path).name
+                in [
+                    "pom.xml",
+                    "requirements.txt",
+                ]
+                or Path(rel_path).suffix.lower() == ".csproj"
+            ):
+                is_cross = payload.source_language != payload.target_language
 
-                migrated_code = "\n".join(
-                    ["pytest==7.4.3", "pytest-bdd==6.1.1", "playwright==1.40.0"]
-                )
-                justification = "Converted pom.xml to requirements.txt"
-                decision = "APPROVED"
+                # SAME language → keep original dependency file content as-is
+                if not is_cross:
+                    migrated_code = original_code
+                    justification = "Dependency file retained (same-language migration)"
+                    decision = "APPROVED"
+
+                # CROSS language → generate target dependency file content (minimal baseline)
+                else:
+                    new_rel_path = self._map_path(rel_path, payload, "config")
+                    tgt_file = target_root / new_rel_path
+                    tgt_file.parent.mkdir(parents=True, exist_ok=True)
+
+                    migrated_code = self._generate_dependency_content(
+                        payload, original_code
+                    )
+
+                    justification = "Dependency generated based on migration rules (language + bdd + tool)"
+                    decision = "APPROVED"
 
             # ✅ STEP FILE MIGRATION
             else:
@@ -76,12 +108,21 @@ class ProjectMigrationExecutionAgent:
                 raw = call_blueverse_agent(agent_input)
                 parsed = self._parse(raw)
 
-                # ✅ FIX 4 — BDD FORMAT CORRECTION
-                migrated_code = parsed.get("migrated_code", "")
-                migrated_code = migrated_code.replace('"<', '"{').replace('>"', '}"')
+                # ✅ FIX 4 — BDD FORMAT CORRECTION + SAFE FALLBACK
+                migrated_code = parsed.get("migrated_code")
 
-                justification = parsed.get("justification", "")
-                decision = parsed.get("decision", "APPROVED")
+                # Fallback if model output is empty
+                if not migrated_code or not str(migrated_code).strip():
+                    migrated_code = original_code
+                    decision = "DENIED"
+                    justification = "Model returned empty output. Fallback applied."
+                else:
+                    # only apply formatting fixes on real model output
+                    migrated_code = (
+                        str(migrated_code).replace('"&lt;', '"{').replace('&gt;"', '}"')
+                    )
+                    justification = parsed.get("justification", "")
+                    decision = parsed.get("decision", "APPROVED")
 
             result_files.append(
                 {
@@ -94,7 +135,6 @@ class ProjectMigrationExecutionAgent:
                     "target_path": str(tgt_file),
                 }
             )
-
         return {
             "executionResult": {"status": "READY_FOR_REVIEW", "files": result_files}
         }
@@ -109,7 +149,13 @@ class ProjectMigrationExecutionAgent:
                 "migrated_code": payload.original_source_code,
                 "justification": "Feature file must remain Gherkin format",
             }
-            return {"agent_response": {"response": str(resp)}}
+            return {
+                "agent_response": {
+                    "decision": resp["decision"],
+                    "migrated_code": resp["migrated_code"],
+                    "justification": resp["justification"],
+                }
+            }
 
         agent_input = {
             "execution_mode": "REVIEW_REPAIR",
@@ -142,55 +188,255 @@ class ProjectMigrationExecutionAgent:
             }
         }
 
+    # ---------------- HTML STEP MIGRATION ----------------
+
+    def _html_step_migration(self, payload):
+
+        step_text = payload.original_source_code or ""
+
+        if not step_text.strip():
+            return {"executionResult": {"status": "READY_FOR_REVIEW", "steps": []}}
+
+        agent_input = {
+            "execution_mode": "INITIAL_MIGRATION",
+            "source_language": payload.source_language,
+            "target_language": payload.target_language,
+            "source_bdd": payload.source_bdd,
+            "target_bdd": payload.target_bdd,
+            "original_source_code": step_text,
+        }
+
+        raw = call_blueverse_agent(agent_input)
+        parsed = self._parse(raw)
+
+        return {
+            "executionResult": {
+                "status": "READY_FOR_REVIEW",
+                "steps": [
+                    {
+                        "step": step_text,
+                        "migrated": parsed.get("migrated_code", ""),
+                        "justification": parsed.get("justification", ""),
+                        "status": "PENDING",
+                    }
+                ],
+            }
+        }
+
     # ---------------- FINAL SAVE ----------------
     def _finalize_file(self, payload):
-
         target_root = Path(payload.target_path) / payload.repo_name
         target_root.mkdir(parents=True, exist_ok=True)
 
-        new_rel = self._map_path(payload.file_path, payload)
-        out_file = target_root / new_rel
-        out_file.parent.mkdir(parents=True, exist_ok=True)
+        # ✅ If frontend sends absolute target file path, write directly to it.
+        # ✅ If frontend sends relative path, write under target_root.
+        p = Path(payload.file_path)
 
+        if p.is_absolute():
+            out_file = p
+        else:
+            out_file = target_root / payload.file_path
+
+        out_file.parent.mkdir(parents=True, exist_ok=True)
         out_file.write_text(payload.migrated_code, encoding="utf-8")
 
         return {"status": "SUCCESS"}
 
     # ---------------- HELPERS ----------------
     def _extract_files(self, plan):
-        files = []
-        for section in [
-            "feature_files",
-            "step_definition_files",
-            "support_files",
-            "config_files",
-        ]:
-            files.extend(plan.get(section, {}).get("files", []))
-        return list(set(files))
+        """
+        Returns a list of tuples: (rel_path, category)
+        category ∈ {"feature", "step", "helper", "config"}
+        """
+        out = []
 
-    def _map_path(self, path, payload):
+        section_map = {
+            "feature_files": "feature",
+            "step_definition_files": "step",
+            "support_files": "helper",
+            "config_files": "config",
+        }
 
+        for section, cat in section_map.items():
+            for p in plan.get(section, {}).get("files", []) or []:
+                if p:
+                    out.append((p, cat))
+
+        # de-dup while preserving first-seen category
+        seen = {}
+        for p, cat in out:
+            if p not in seen:
+                seen[p] = cat
+        return [(p, seen[p]) for p in seen]
+
+    def _generate_dependency_content(self, payload, original_code):
+        src_lang = payload.source_language
+        tgt_lang = payload.target_language
+        src_bdd = payload.source_bdd
+        tgt_bdd = payload.target_bdd
+
+        is_same_lang = src_lang == tgt_lang
+        is_same_bdd = src_bdd == tgt_bdd
+
+        # ✅ STEP 1 — Parse source dependencies (basic)
+        lines = original_code.splitlines()
+
+        # ✅ STEP 2 — Initialize target deps container
+        deps = []
+
+        # ✅ STEP 3 — Rule-based handling
+        if is_same_lang and is_same_bdd:
+            deps.extend(self._remove_existing_playwright(lines))
+            deps.append(self._get_playwright_dep(tgt_lang))
+
+        elif is_same_lang and not is_same_bdd:
+            deps.extend(self._filter_language_deps(lines, tgt_lang))
+            deps.append(self._get_bdd_dep(tgt_lang, tgt_bdd))
+            deps.append(self._get_playwright_dep(tgt_lang))
+
+        elif not is_same_lang and is_same_bdd:
+            deps.append(self._get_language_base(tgt_lang))
+            deps.append(self._get_bdd_dep(tgt_lang, tgt_bdd))
+            deps.append(self._get_playwright_dep(tgt_lang))
+
+        else:
+            deps.append(self._get_language_base(tgt_lang))
+            deps.append(self._get_bdd_dep(tgt_lang, tgt_bdd))
+            deps.append(self._get_playwright_dep(tgt_lang))
+
+        if tgt_lang == "python":
+            return "\n".join(deps)
+
+        if tgt_lang == "java":
+            return "<dependencies>\n" + "\n".join(deps) + "\n</dependencies>"
+
+        if tgt_lang == "csharp":
+            return (
+                '<Project Sdk="Microsoft.NET.Sdk">\n'
+                "  <ItemGroup>\n" + "\n".join(deps) + "\n  </ItemGroup>\n"
+                "</Project>"
+            )
+
+    def _remove_existing_playwright(self, lines):
+        return [l for l in lines if "playwright" not in l.lower()]
+
+    def _get_playwright_dep(self, lang):
+        if lang == "python":
+            return "playwright==1.40.0"
+        if lang == "java":
+            return "<dependency>Playwright latest</dependency>"
+        if lang == "csharp":
+            return (
+                '<PackageReference Include="Microsoft.Playwright" Version="1.40.0" />'
+            )
+
+    def _get_bdd_dep(self, lang, bdd):
+        if lang == "python":
+            if bdd == "pytest-bdd":
+                return "pytest-bdd==6.1.1"
+            if bdd == "behave":
+                return "behave==1.2.6"
+        if lang == "java":
+            if bdd == "cucumber":
+                return "<dependency>Cucumber latest</dependency>"
+        if lang == "csharp":
+            if bdd == "specflow":
+                return '<PackageReference Include="SpecFlow" Version="3.9.74" />'
+
+    def _get_language_base(self, lang):
+        if lang == "python":
+            return "pytest==7.4.3"
+        if lang == "java":
+            return "<!-- Java base dependencies -->"
+        if lang == "csharp":
+            return '<Project Sdk="Microsoft.NET.Sdk">'
+
+    def _filter_language_deps(self, lines, lang):
+        skip_keywords = ["cucumber", "specflow", "gauge", "pytest-bdd", "behave"]
+
+        return [l for l in lines if not any(k in l.lower() for k in skip_keywords)]
+
+    def _map_path(self, path, payload, category="config"):
         p = (path or "").replace("\\", "/")
 
-        if payload.target_language == "python":
-            # ✅ STEP FILES
-            if "src/test/java" in p and p.endswith(".java"):
-                name = Path(p).stem
-                return f"tests/steps/{name}.py"
+        src_lang = payload.source_language
+        tgt_lang = payload.target_language
+        tgt_bdd = payload.target_bdd
 
-            # ✅ FEATURE FILES
-            if "src/test/resources/features" in p and p.endswith(".feature"):
-                return f"features/{Path(p).name}"
+        file_path = Path(p)
+        name = file_path.name
+        suffix = file_path.suffix.lower()
 
-            # ✅ pom.xml → requirements.txt
-            if p.endswith("pom.xml"):
-                return "requirements.txt"
+        # ✅ SAME LANGUAGE + SAME BDD → KEEP STRUCTURE
+        if src_lang == tgt_lang and payload.source_bdd == payload.target_bdd:
+            return p
 
-            # ✅ fallback
-            if p.endswith(".feature"):
-                return f"features/{Path(p).name}"
+        # ✅ FEATURE FILES (BDD-driven)
+        if suffix == ".feature":
+            if tgt_bdd == "pytest-bdd":
+                return f"features/{name}"
+            elif tgt_bdd == "cucumber":
+                return f"src/test/resources/features/{name}"
+            elif tgt_bdd == "gauge":
+                return f"specs/{name}"
+            return name
 
-        return path
+        # ✅ EXTENSION MAP
+        ext_map = {"java": ".java", "python": ".py", "csharp": ".cs"}
+        new_ext = ext_map.get(tgt_lang, suffix)
+        base_name = file_path.stem + new_ext
+
+        # ✅ STEP FILES (CRITICAL LOGIC)
+        if category == "step":
+            if tgt_bdd == "pytest-bdd":
+                return f"tests/steps/{base_name}"
+            elif tgt_bdd == "cucumber":
+                if tgt_lang == "java":
+                    return f"src/test/java/stepdefs/{base_name}"
+                elif tgt_lang == "python":
+                    return f"features/steps/{base_name}"
+                elif tgt_lang == "csharp":
+                    return f"StepDefinitions/{base_name}"
+            elif tgt_bdd == "gauge":
+                return f"step_implementation/{base_name}"
+
+        # ✅ HELPERS
+        if category == "helper":
+            if tgt_bdd == "pytest-bdd":
+                return f"tests/helpers/{base_name}"
+            elif tgt_bdd == "cucumber":
+                return f"src/test/java/utils/{base_name}"
+            elif tgt_bdd == "gauge":
+                return f"env/{base_name}"
+
+        # ✅ CONFIG FILES (FIXED – TARGET BASED MAPPING)
+        if category == "config":
+            if name == "pom.xml":
+                if tgt_lang == "python":
+                    return "requirements.txt"
+                elif tgt_lang == "csharp":
+                    return f"{payload.repo_name}.csproj"
+                else:
+                    return "pom.xml"
+
+            if name == "requirements.txt":
+                if tgt_lang == "java":
+                    return "pom.xml"
+                elif tgt_lang == "csharp":
+                    return f"{payload.repo_name}.csproj"
+                else:
+                    return "requirements.txt"
+
+            if suffix == ".csproj":
+                if tgt_lang == "python":
+                    return "requirements.txt"
+                elif tgt_lang == "java":
+                    return "pom.xml"
+                else:
+                    return f"{payload.repo_name}.csproj"
+
+        # ✅ DEFAULT
+        return f"src/{base_name}"
 
     def _parse(self, raw):
         try:

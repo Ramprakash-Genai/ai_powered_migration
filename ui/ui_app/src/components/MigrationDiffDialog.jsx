@@ -34,7 +34,7 @@ export default function MigrationDiffDialog({
 
     const handleApprove = () => {
         setErr('');
-        onApprove?.(file?.path);
+        onApprove?.(file?.target_path);
     };
 
     const handleReject = () => {
@@ -43,7 +43,7 @@ export default function MigrationDiffDialog({
             return;
         }
         setErr('');
-        onReject?.(file?.path, comment.trim());
+        onReject?.(file?.target_path, comment.trim());
     };
 
     return (
@@ -96,7 +96,7 @@ export default function MigrationDiffDialog({
                             Selenium (Original)
                         </Typography>
                         <Typography variant="caption" sx={{ color: 'text.secondary', mb: 1 }}>
-                            {file?.source_path || 'Source file path not available'}
+                            {file?.path || 'Source file path not available'}
                         </Typography>
                         <pre style={{ margin: 0, whiteSpace: 'pre', overflowX: 'auto' }}>
                             {file?.original || ''}

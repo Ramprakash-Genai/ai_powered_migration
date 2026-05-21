@@ -443,9 +443,10 @@ export default function MigrationOverview({
                             <MigrationExecutionPanel
                                 files={executionResult.files || []}
                                 selectedFile={selectedFile}
-                                onSelectFile={(fp) => {
-                                    const file = executionResult.files.find(f => f.path === fp);
-                                    if (file?.status === 'PENDING') setSelectedFile(fp);
+                                onSelectFile={(file) => {
+                                    if (file?.status === 'PENDING') {
+                                        setSelectedFile(file.target_path);
+                                    }
                                 }}
                             />
                         </Box>
@@ -497,7 +498,7 @@ export default function MigrationOverview({
 
                                                             target_path: setupResult?.target_path,
                                                             repo_name: setupResult?.repo_name,
-                                                            file_path: file.path,
+                                                            file_path: file.target_path,
                                                             migrated_code: file.migrated || '',
                                                         }),
                                                     });
@@ -537,12 +538,12 @@ export default function MigrationOverview({
                     {/* Diff popup */}
                     <MigrationDiffDialog
                         open={openDiff}
-                        file={(executionResult?.files || []).find(f => f.path === selectedFile)}
+                        file={(executionResult?.files || []).find(f => f.target_path === selectedFile)}
                         loading={loadingRepair}
                         onClose={() => setOpenDiff(false)}
                         onApprove={async (filePath) => {
                             try {
-                                const fileObj = (executionResult?.files || []).find(f => f.path === filePath);
+                                const fileObj = executionResult.files.find(f => f.target_path === filePath);
 
                                 const response = await fetch(EXECUTE_API_URL, {
                                     method: 'POST',
@@ -574,7 +575,7 @@ export default function MigrationOverview({
                                 setExecutionResult(prev => ({
                                     ...prev,
                                     files: prev.files.map(f =>
-                                        f.path === filePath ? { ...f, status: 'APPROVED' } : f
+                                        f.target_path === filePath ? { ...f, status: 'APPROVED' } : f
                                     ),
                                 }));
 
@@ -596,7 +597,7 @@ export default function MigrationOverview({
                             try {
                                 console.log("🚀 Sending REVIEW_REPAIR request...");
 
-                                const file = executionResult.files.find(f => f.path === filePath);
+                                const file = executionResult.files.find(f => f.target_path === filePath);
 
                                 const response = await fetch(EXECUTE_API_URL, {
                                     method: 'POST',
@@ -632,12 +633,12 @@ export default function MigrationOverview({
                                     return;
                                 }
 
-                                console.log("✅ REPAIR RESULT:", parsed);                               
+                                console.log("✅ REPAIR RESULT:", parsed);
 
                                 setExecutionResult(prev => ({
                                     ...prev,
                                     files: prev.files.map(f =>
-                                        f.path === filePath
+                                        f.target_path === filePath
                                             ? {
                                                 ...f,
                                                 migrated: parsed.migrated_code || f.migrated,
